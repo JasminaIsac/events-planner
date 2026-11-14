@@ -7,7 +7,11 @@ import {
   logout as logoutApi,
   register as registerApi,
 } from "~/api/auth";
-import { clearAccessToken, getAccessToken } from "~/api/tokenStorage";
+import {
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+} from "~/api/tokenStorage";
 import { getCurrentUser } from "~/api/users";
 import type { LoginRequest, RegisterRequest } from "~/types/auth";
 import { routePaths } from "~/utils/routePaths";
@@ -16,6 +20,8 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { AuthContext } from "./AuthContext";
+
+const isMockMode = import.meta.env.VITE_USE_MOCK === "true";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -29,21 +35,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAuthenticated(false);
   }
 
+  async function enterDemoSession() {
+    const { createDemoAccessToken } = await import("~/mocks/data/user");
+    setAccessToken(createDemoAccessToken());
+    await getCurrentUser();
+    setIsAuthenticated(true);
+  }
+
   useEffect(() => {
     async function restoreAuth() {
-      const token = getAccessToken();
-
-      if (!token) {
-        setIsAuthenticated(false);
-        setIsAuthLoading(false);
-        return;
-      }
-
       try {
-        await getCurrentUser();
-        setIsAuthenticated(true);
+        const token = getAccessToken();
+
+        if (token) {
+          await getCurrentUser();
+          setIsAuthenticated(true);
+          return;
+        }
+
+        if (isMockMode) {
+          await enterDemoSession();
+          return;
+        }
+
+        setIsAuthenticated(false);
       } catch {
-        clearSession();
+        if (isMockMode) {
+          try {
+            await enterDemoSession();
+            return;
+          } catch {
+            clearSession();
+          }
+        } else {
+          clearSession();
+        }
       } finally {
         setIsAuthLoading(false);
       }
@@ -54,6 +80,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     function handleSessionExpired() {
+      if (isMockMode) {
+        void enterDemoSession().then(() => {
+          navigate(routePaths.Index, { replace: true });
+        });
+        return;
+      }
+
       clearSession();
       navigate(routePaths.login, { replace: true });
     }
@@ -78,6 +111,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    if (isMockMode) {
+      // Demo stays signed in so visitors never hit the login wall.
+      await enterDemoSession();
+      navigate(routePaths.Index, { replace: true });
+      return;
+    }
+
     try {
       await logoutApi();
     } finally {
